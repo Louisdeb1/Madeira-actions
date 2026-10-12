@@ -1,0 +1,145 @@
+name: Build Madeira External Storage IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout overlay source
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        shell: bash
+        run: |
+          set -euxo pipefail
+          XCODE="$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Download Madeira 0.1.3 IPA
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -L --fail --retry 3 \
+            -o /tmp/Madeira.ipa \
+            "https://github.com/willfaust/Madeira/releases/download/v0.1.3/Madeira-0.1.3.ipa"
+          echo "71e900cbc140778bd6fa67c1062821981ed98e6bfb674d853cfeefd6d242e1c0  /tmp/Madeira.ipa" | shasum -a 256 -c -
+          rm -rf /tmp/madeira-work
+          mkdir -p /tmp/madeira-work
+          unzip -q /tmp/Madeira.ipa -d /tmp/madeira-work
+          test -f /tmp/madeira-work/Payload/Madeira.app/Madeira.debug.dylib
+
+      - name: Verify launcher symbols
+        shell: bash
+        run: |
+          set -euxo pipefail
+          APP=/tmp/madeira-work/Payload/Madeira.app
+          nm -gU "$APP/Madeira.debug.dylib" > /tmp/madeira-symbols.txt
+          for s in \
+            _wine_process_start \
+            _wine_process_is_running \
+            _wineserver_start \
+            _wineserver_is_running \
+            _wineserver_stop
+          do
+            grep -q " $s$" /tmp/madeira-symbols.txt || {
+              echo "Missing exported symbol: $s"
+              exit 1
+            }
+          done
+
+      - name: Save original entitlements
+        shell: bash
+        run: |
+          set -euxo pipefail
+          APP=/tmp/madeira-work/Payload/Madeira.app
+          codesign -d --entitlements :- "$APP" > /tmp/app-entitlements.plist 2>/dev/null || true
+          test -s /tmp/app-entitlements.plist
+          if [ -d "$APP/PlugIns/MadeiraJITHelper.appex" ]; then
+            codesign -d --entitlements :- "$APP/PlugIns/MadeiraJITHelper.appex" > /tmp/helper-entitlements.plist 2>/dev/null || true
+          fi
+
+      - name: Inject external-storage launcher
+        shell: bash
+        run: |
+          set -euxo pipefail
+          APP=/tmp/madeira-work/Payload/Madeira.app
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+
+          cp "$APP/Madeira.debug.dylib" "$APP/Morig.dylib"
+          install_name_tool -id '@loader_path/Morig.dylib' "$APP/Morig.dylib"
+
+          xcrun --sdk iphoneos clang \
+            -target arm64-apple-ios17.0 \
+            -isysroot "$SDK" \
+            -dynamiclib \
+            -fobjc-arc -fblocks -fmodules \
+            -framework UIKit \
+            -framework Foundation \
+            -framework UniformTypeIdentifiers \
+            -framework QuartzCore \
+            -Wl,-reexport_library,"$APP/Morig.dylib" \
+            -Wl,-install_name,@rpath/Madeira.debug.dylib \
+            "$GITHUB_WORKSPACE/external-storage/ExternalStorageOverlay.m" \
+            -o "$APP/Madeira.debug.dylib"
+
+          echo "=== wrapper dependencies ==="
+          otool -L "$APP/Madeira.debug.dylib"
+          echo "=== re-export commands ==="
+          otool -l "$APP/Madeira.debug.dylib" | grep -A5 -E 'LC_REEXPORT_DYLIB|LC_ID_DYLIB' || true
+          nm -gU "$APP/Madeira.debug.dylib" | grep -E 'wine_process_start|wineserver_start' || true
+
+      - name: Ad-hoc sign modified bundle
+        shell: bash
+        run: |
+          set -euxo pipefail
+          APP=/tmp/madeira-work/Payload/Madeira.app
+
+          rm -rf "$APP/_CodeSignature"
+          codesign --force --sign - "$APP/Morig.dylib"
+          codesign --force --sign - "$APP/Madeira.debug.dylib"
+
+          if [ -d "$APP/Frameworks/StikJIT.framework" ]; then
+            codesign --force --sign - "$APP/Frameworks/StikJIT.framework"
+          fi
+
+          if [ -d "$APP/PlugIns/MadeiraJITHelper.appex" ]; then
+            rm -rf "$APP/PlugIns/MadeiraJITHelper.appex/_CodeSignature"
+            if [ -s /tmp/helper-entitlements.plist ]; then
+              codesign --force --sign - --entitlements /tmp/helper-entitlements.plist "$APP/PlugIns/MadeiraJITHelper.appex"
+            else
+              codesign --force --sign - "$APP/PlugIns/MadeiraJITHelper.appex"
+            fi
+          fi
+
+          codesign --force --sign - --entitlements /tmp/app-entitlements.plist "$APP"
+          codesign --verify --deep --strict "$APP"
+
+      - name: Package IPA
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf "$GITHUB_WORKSPACE/out"
+          mkdir -p "$GITHUB_WORKSPACE/out/Payload"
+          ditto /tmp/madeira-work/Payload/Madeira.app "$GITHUB_WORKSPACE/out/Payload/Madeira.app"
+          cd "$GITHUB_WORKSPACE/out"
+          zip -qry Madeira-external-storage.ipa Payload
+          shasum -a 256 Madeira-external-storage.ipa | tee Madeira-external-storage.ipa.sha256
+          ls -lh Madeira-external-storage.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Madeira-external-storage-IPA
+          path: |
+            out/Madeira-external-storage.ipa
+            out/Madeira-external-storage.ipa.sha256
+          if-no-files-found: error
