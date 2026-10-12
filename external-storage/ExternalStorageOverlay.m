@@ -206,8 +206,8 @@ extern int wine_process_is_running(void);
 }
 
 - (void)launchExecutable:(NSURL *)exe root:(NSURL *)root {
-    NSString *exePath = exe.standardizedFileURL.path;
-    NSString *rootPath = root.standardizedFileURL.path;
+    NSString *exePath = exe.standardizedURL.path;
+    NSString *rootPath = root.standardizedURL.path;
     NSString *prefixWithSlash = [rootPath hasSuffix:@"/"] ? rootPath : [rootPath stringByAppendingString:@"/"];
     if (![exePath hasPrefix:prefixWithSlash]) {
         [self alert:@"Chemin invalide" message:@"Le .exe n'est pas contenu dans le dossier choisi."];
