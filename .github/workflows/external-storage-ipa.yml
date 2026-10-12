@@ -1,4 +1,4 @@
-name: Build Madeira External Storage IPA
+name: Build Madeira v0.1.2 External Storage + Game Mode + ProMotion
 
 on:
   workflow_dispatch:
@@ -67,7 +67,30 @@ jobs:
             codesign -d --entitlements :- "$APP/PlugIns/MadeiraJITHelper.appex" > /tmp/helper-entitlements.plist 2>/dev/null || true
           fi
 
-      - name: Inject external-storage launcher
+      - name: Enable Game Mode and ProMotion
+        shell: bash
+        run: |
+          set -euxo pipefail
+          APP=/tmp/madeira-work/Payload/Madeira.app
+          PLIST="$APP/Info.plist"
+
+          /usr/libexec/PlistBuddy -c "Set :LSSupportsGameMode true" "$PLIST" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c "Add :LSSupportsGameMode bool true" "$PLIST"
+
+          /usr/libexec/PlistBuddy -c "Set :CADisableMinimumFrameDurationOnPhone true" "$PLIST" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c "Add :CADisableMinimumFrameDurationOnPhone bool true" "$PLIST"
+
+          /usr/libexec/PlistBuddy -c "Set :LSApplicationCategoryType public.app-category.games" "$PLIST" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c "Add :LSApplicationCategoryType string public.app-category.games" "$PLIST"
+
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSSupportsGameMode' "$PLIST")" = "true"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CADisableMinimumFrameDurationOnPhone' "$PLIST")" = "true"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSApplicationCategoryType' "$PLIST")" = "public.app-category.games"
+
+          echo "Game Mode: $(/usr/libexec/PlistBuddy -c 'Print :LSSupportsGameMode' "$PLIST")"
+          echo "ProMotion: $(/usr/libexec/PlistBuddy -c 'Print :CADisableMinimumFrameDurationOnPhone' "$PLIST")"
+
+      - name: Inject full-folder external-storage launcher
         shell: bash
         run: |
           set -euxo pipefail
@@ -96,6 +119,8 @@ jobs:
           echo "=== re-export commands ==="
           otool -l "$APP/Madeira.debug.dylib" | grep -A5 -E 'LC_REEXPORT_DYLIB|LC_ID_DYLIB' || true
           nm -gU "$APP/Madeira.debug.dylib" | grep -E 'wine_process_start|wineserver_start' || true
+          strings "$APP/Madeira.debug.dylib" | grep -q '__ExternalGame'
+          strings "$APP/Madeira.debug.dylib" | grep -q 'MADEIRA_EXTERNAL_ROOT'
 
       - name: Ad-hoc sign modified bundle
         shell: bash
@@ -131,15 +156,15 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/out/Payload"
           ditto /tmp/madeira-work/Payload/Madeira.app "$GITHUB_WORKSPACE/out/Payload/Madeira.app"
           cd "$GITHUB_WORKSPACE/out"
-          zip -qry Madeira-v0.1.2-external-storage.ipa Payload
-          shasum -a 256 Madeira-v0.1.2-external-storage.ipa | tee Madeira-v0.1.2-external-storage.ipa.sha256
-          ls -lh Madeira-v0.1.2-external-storage.ipa
+          zip -qry Madeira-v0.1.2-USB-GameMode-ProMotion.ipa Payload
+          shasum -a 256 Madeira-v0.1.2-USB-GameMode-ProMotion.ipa | tee Madeira-v0.1.2-USB-GameMode-ProMotion.ipa.sha256
+          ls -lh Madeira-v0.1.2-USB-GameMode-ProMotion.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Madeira-v0.1.2-external-storage-IPA
+          name: Madeira-v0.1.2-USB-GameMode-ProMotion
           path: |
-            out/Madeira-v0.1.2-external-storage.ipa
-            out/Madeira-v0.1.2-external-storage.ipa.sha256
+            out/Madeira-v0.1.2-USB-GameMode-ProMotion.ipa
+            out/Madeira-v0.1.2-USB-GameMode-ProMotion.ipa.sha256
           if-no-files-found: error
