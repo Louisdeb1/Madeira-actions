@@ -24,14 +24,14 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
-      - name: Download Madeira 0.1.3 IPA
+      - name: Download Madeira 0.1.2 IPA
         shell: bash
         run: |
           set -euxo pipefail
           curl -L --fail --retry 3 \
             -o /tmp/Madeira.ipa \
-            "https://github.com/willfaust/Madeira/releases/download/v0.1.3/Madeira-0.1.3.ipa"
-          echo "71e900cbc140778bd6fa67c1062821981ed98e6bfb674d853cfeefd6d242e1c0  /tmp/Madeira.ipa" | shasum -a 256 -c -
+            "https://github.com/willfaust/Madeira/releases/download/v0.1.2/Madeira-0.1.2.ipa"
+          echo "ed1cd1fdb5e93a33d0f4584f74d04519ace8f39791eb4129487c8f36ff2e3815  /tmp/Madeira.ipa" | shasum -a 256 -c -
           rm -rf /tmp/madeira-work
           mkdir -p /tmp/madeira-work
           unzip -q /tmp/Madeira.ipa -d /tmp/madeira-work
@@ -131,15 +131,15 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/out/Payload"
           ditto /tmp/madeira-work/Payload/Madeira.app "$GITHUB_WORKSPACE/out/Payload/Madeira.app"
           cd "$GITHUB_WORKSPACE/out"
-          zip -qry Madeira-external-storage.ipa Payload
-          shasum -a 256 Madeira-external-storage.ipa | tee Madeira-external-storage.ipa.sha256
-          ls -lh Madeira-external-storage.ipa
+          zip -qry Madeira-v0.1.2-external-storage.ipa Payload
+          shasum -a 256 Madeira-v0.1.2-external-storage.ipa | tee Madeira-v0.1.2-external-storage.ipa.sha256
+          ls -lh Madeira-v0.1.2-external-storage.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Madeira-external-storage-IPA
+          name: Madeira-v0.1.2-external-storage-IPA
           path: |
-            out/Madeira-external-storage.ipa
-            out/Madeira-external-storage.ipa.sha256
+            out/Madeira-v0.1.2-external-storage.ipa
+            out/Madeira-v0.1.2-external-storage.ipa.sha256
           if-no-files-found: error
