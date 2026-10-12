@@ -88,7 +88,7 @@ extern int wine_process_is_running(void);
     }
     UIViewController *vc = [self topController];
     if (!vc) return;
-    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTType.folder] asCopy:NO];
+    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[[UTType folder]] asCopy:NO];
     picker.delegate = self;
     picker.allowsMultipleSelection = NO;
     [vc presentViewController:picker animated:YES completion:nil];
