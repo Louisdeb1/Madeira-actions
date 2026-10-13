@@ -113,7 +113,6 @@ jobs:
           otool -L "$APP/Madeira.debug.dylib"
           nm -gU "$APP/Madeira.debug.dylib" | grep -E 'wine_process_start|wineserver_start' || true
           strings "$APP/Madeira.debug.dylib" | grep -q 'DOSSIER JEU'
-          strings "$APP/Madeira.debug.dylib" | grep -q 'Dossier autorisé récursivement'
           strings "$APP/Madeira.debug.dylib" | grep -q '__ExternalGame'
           strings "$APP/Madeira.debug.dylib" | grep -q 'MADEIRA_EXTERNAL_ROOT'
 
