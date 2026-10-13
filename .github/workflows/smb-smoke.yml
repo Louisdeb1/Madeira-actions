@@ -1,0 +1,41 @@
+name: SMB Source Smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/Madeira/ExternalSMBStorage.inc"
+      - "app/Madeira/IOSDisplayShim.m"
+      - ".github/workflows/smb-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Select newest Xcode
+        run: |
+          set -euxo pipefail
+          NEWEST="$(ls -d /Applications/Xcode_2*.app 2>/dev/null | sort -V | tail -1 || true)"
+          if [ -n "$NEWEST" ]; then
+            sudo xcode-select -s "$NEWEST/Contents/Developer"
+          fi
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Objective-C syntax check
+        run: |
+          set -euxo pipefail
+          xcrun --sdk iphoneos clang \
+            -arch arm64 \
+            -miphoneos-version-min=17.0 \
+            -fobjc-arc -fmodules -fsyntax-only \
+            -Iapp/Madeira \
+            app/Madeira/IOSDisplayShim.m
