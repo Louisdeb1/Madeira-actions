@@ -29,7 +29,7 @@ compile_one() {
         -Wno-implicit-function-declaration -Wno-int-conversion \
         -include "$WINE_BUILD/include/config.h" \
         -include "$BUILD_DIR/shims/wine_ios_exit.h" \
-        -I"$BUILD_DIR/shims" \
+        -I"$BUILD_DIR" -I"$BUILD_DIR/shims" \
         -I"$WINE_BUILD/dlls/ntdll" -I"$WINE_SRC/dlls/ntdll" -I"$WINE_SRC/dlls/ntdll/unix" \
         -I"$WINE_BUILD/include" -I"$WINE_SRC/include" \
         -D__WINESRC__ -DLTC_NO_PROTOTYPES -DLTC_SOURCE -D_NTSYSTEM_ \
@@ -61,7 +61,7 @@ compile_unixlib() {
         -Wno-implicit-function-declaration -Wno-int-conversion \
         -include "$WINE_BUILD/include/config.h" \
         -include "$BUILD_DIR/shims/wine_ios_exit.h" \
-        -I"$BUILD_DIR/shims" \
+        -I"$BUILD_DIR" -I"$BUILD_DIR/shims" \
         -I"$WINE_BUILD/include" -I"$WINE_SRC/include" \
         -D__WINESRC__ -D_NTSYSTEM_ -D_ACRTIMP= -DWINBASEAPI= \
         -DWINE_UNIX_LIB -DWINE_IOS=1 \
@@ -78,7 +78,6 @@ compile_unixlib() {
     fi
 }
 
-# Direct SMB transport: pin the exact libsmb2 revision used by this build.
 SMB2_REV="7c8eee4d5766da26aceca7e7aeb7549ce8af4e0c"
 SMB2_SRC="$BUILD_DIR/_libsmb2-src"
 SMB2_BUILD="$BUILD_DIR/_libsmb2-build"
@@ -105,7 +104,6 @@ SMB2_LIB="$(find "$SMB2_BUILD" -name 'libsmb2.a' -print -quit)"
 test -n "$SMB2_LIB" -a -f "$SMB2_LIB" || { echo "FATAL: libsmb2.a missing"; exit 1; }
 echo "Direct SMB library: $SMB2_LIB ($(wc -c < "$SMB2_LIB" | tr -d ' ') bytes)"
 
-# Generate Wine ntdll sources with sparse direct-SMB pread/mmap hooks.
 python3 "$BUILD_DIR/smb_vfs_patch.py" \
     "$WINE_SRC/dlls/ntdll/unix/file.c" \
     "$BUILD_DIR/virtual_ios.c" \
@@ -179,7 +177,6 @@ if [ -n "$FAILED_FILES" ]; then
     echo "Failed:$FAILED_FILES"
 fi
 
-# Do not allow the direct-SMB hooks to silently disappear.
 test -f "$OBJ_DIR/file.o" -a -f "$OBJ_DIR/virtual.o" || { echo "FATAL: SMB-patched Wine objects missing"; exit 1; }
 
 echo ""
@@ -196,7 +193,6 @@ ar rcs "$OBJ_DIR/libntdll_base.a" \
     "$OBJ_DIR/socket.o" "$OBJ_DIR/sync.o" "$OBJ_DIR/syscall.o" "$OBJ_DIR/system.o" \
     "$OBJ_DIR/tape.o" "$OBJ_DIR/thread.o" "$OBJ_DIR/virtual.o"
 
-# Merge libsmb2 into the archive already linked by the Xcode target.
 /usr/bin/libtool -static -o "$APP_LIB" "$OBJ_DIR/libntdll_base.a" "$SMB2_LIB"
 ranlib "$APP_LIB"
 echo "libntdll_unix+libsmb2.a: $(wc -c < "$APP_LIB" | tr -d ' ') bytes"
