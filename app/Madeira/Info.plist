@@ -34,6 +34,8 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Madeira se connecte directement à votre serveur SMB/TrueNAS pour lire les fichiers des jeux sans importer tout le jeu sur l’iPhone.</string>
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>UILaunchScreen</key>
