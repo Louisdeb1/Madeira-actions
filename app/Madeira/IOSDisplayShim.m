@@ -201,3 +201,6 @@ void macdrv_view_release_metal_view(macdrv_metal_view v) {
    lives in a separate .inc so it is easy to audit while still compiling into
    the normal Madeira target without injecting a post-build dylib. */
 #include "ExternalSMBStorage.inc"
+
+/* Picker presentation + persistent security-scope fixes. */
+#include "ExternalSMBPickerFix.inc"
