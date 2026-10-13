@@ -49,12 +49,6 @@ compile_one() {
     fi
 }
 
-# iOS-Madeira 2026-07-05 (Steam S0): compile a DLL's unix side into
-# libntdll_unix.a. Args: src, obj-name, funcs-prefix, extra flags...
-# The __wine_unix_call_funcs tables are renamed per-lib (they'd collide
-# in one archive) and registered by name in virtual_ios.c's
-# load_builtin_unixlib. GnuTLS-backed libs add ios_gnutls_shim.h to
-# route dlopen/dlsym at the static symtab (gnutls_symtab_ios.c).
 CRYPTO_DIR="$REPO_ROOT/build/crypto-unix"
 GNUTLS_PREFIX="$REPO_ROOT/toolchains/gnutls-ios"
 compile_unixlib() {
@@ -84,19 +78,46 @@ compile_unixlib() {
     fi
 }
 
-echo "=== Building ntdll unix (iOS) ==="
+# Direct SMB transport: pin the exact libsmb2 revision used by this build.
+SMB2_REV="7c8eee4d5766da26aceca7e7aeb7549ce8af4e0c"
+SMB2_SRC="$BUILD_DIR/_libsmb2-src"
+SMB2_BUILD="$BUILD_DIR/_libsmb2-build"
+rm -rf "$SMB2_SRC" "$SMB2_BUILD"
+git init -q "$SMB2_SRC"
+git -C "$SMB2_SRC" remote add origin https://github.com/sahlberg/libsmb2.git
+git -C "$SMB2_SRC" fetch -q --depth 1 origin "$SMB2_REV"
+git -C "$SMB2_SRC" checkout -q FETCH_HEAD
+cmake -S "$SMB2_SRC" -B "$SMB2_BUILD" -G Ninja \
+    -DCMAKE_SYSTEM_NAME=iOS \
+    -DCMAKE_OSX_SYSROOT="$SDK" \
+    -DCMAKE_OSX_ARCHITECTURES=arm64 \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
+    -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DENABLE_EXAMPLES=OFF \
+    -DENABLE_UTILS=OFF \
+    -DENABLE_LIBKRB5=OFF \
+    -DENABLE_GSSAPI=OFF \
+    -DENABLE_LIBDCERPC=OFF
+cmake --build "$SMB2_BUILD" --parallel "$(sysctl -n hw.ncpu)"
+SMB2_LIB="$(find "$SMB2_BUILD" -name 'libsmb2.a' -print -quit)"
+test -n "$SMB2_LIB" -a -f "$SMB2_LIB" || { echo "FATAL: libsmb2.a missing"; exit 1; }
+echo "Direct SMB library: $SMB2_LIB ($(wc -c < "$SMB2_LIB" | tr -d ' ') bytes)"
 
-# iOS-Madeira 2026-05-13: silent audio driver — provides a null
-# IAudioClock that advances at real time so FMOD's audio-gated rhythm
-# logic in Thumper et al. advances past intro music.
+# Generate Wine ntdll sources with sparse direct-SMB pread/mmap hooks.
+python3 "$BUILD_DIR/smb_vfs_patch.py" \
+    "$WINE_SRC/dlls/ntdll/unix/file.c" \
+    "$BUILD_DIR/virtual_ios.c" \
+    "$OBJ_DIR/file_smb_ios.c" \
+    "$OBJ_DIR/virtual_smb_ios.c"
+
+echo "=== Building ntdll unix (iOS) ==="
 compile_one "$BUILD_DIR/audio_null_ios.c" "audio_null_ios"
 
-# iOS-Madeira 2026-07-05 (Steam S0): network + crypto unix sides.
 echo "=== Building crypto/network unixlibs ==="
 "$CRYPTO_DIR/gen_gnutls_symtab.sh" > /dev/null
 compile_one "$CRYPTO_DIR/gnutls_symtab_ios.c" "gnutls_symtab_ios"
-# ml824: -include netfilter_ios.h wraps this file's getaddrinfo() so Unity's
-# cloud telemetry hosts fail fast (see the header).
 compile_unixlib "$WINE_SRC/dlls/ws2_32/unixlib.c" "ws2_32_unixlib" "ws2_32" \
     -I"$WINE_SRC/dlls/ws2_32" -include "$BUILD_DIR/shims/netfilter_ios.h"
 compile_unixlib "$WINE_SRC/dlls/bcrypt/gnutls.c" "bcrypt_unixlib" "bcrypt" \
@@ -107,29 +128,17 @@ compile_unixlib "$WINE_SRC/dlls/secur32/schannel_gnutls.c" "secur32_unixlib" "se
     -I"$WINE_SRC/dlls/secur32" -I"$GNUTLS_PREFIX/include" \
     -DSONAME_LIBGNUTLS=\"libgnutls.so.30\" \
     -include "$CRYPTO_DIR/ios_gnutls_shim.h"
-# iOS-Madeira ml494 (#61 text wall): dwrite had NO unixlib, so every
-# __wine_unix_call from dwrite.dll failed and get_glyph_bbox never ran —
-# every glyph run reported an EMPTY bbox and Chromium drew no text at all.
-# freetype is static here, so dwrite_freetype_ios.c rewrites dlopen/dlsym.
-# dwrite.h/dwrite_3.h are widl-generated and only exist in the arm64ec
-# build tree, so that include dir is named explicitly here.
 compile_unixlib "$BUILD_DIR/dwrite_freetype_ios.c" "dwrite_unixlib" "dwrite" \
     -I"$WINE_SRC/dlls/dwrite" -I"$REPO_ROOT/research/freetype/include" \
     -I"$REPO_ROOT/wine/build-arm64ec/include"
 compile_unixlib "$CRYPTO_DIR/crypt32_unixlib_ios.c" "crypt32_unixlib" "crypt32" \
     -I"$WINE_SRC/dlls/crypt32" -I"$GNUTLS_PREFIX/include" \
     -include "$CRYPTO_DIR/ios_gnutls_shim.h"
-# iOS-Madeira 2026-08-03 (#79 transport): in-process NSI TCP connection
-# tables (nsiproxy.sys is not shipped; PE nsi.dll falls back to this).
 compile_one "$BUILD_DIR/nsi_unixlib_ios.c" "nsi_unixlib_ios"
-# iOS-Madeira 2026-09-10: controller state table behind the replacement
-# xinput1_x.dll (build/xinput). Plain C, no Wine headers.
 compile_one "$BUILD_DIR/xinput_ios.c" "xinput_ios"
 
 for src in $WINE_SRC/dlls/ntdll/unix/*.c; do
     name=$(basename "$src" .c)
-
-    # Use patched versions for specific files
     case "$name" in
         loader)
             compile_one "$BUILD_DIR/loader_ios.c" "loader"
@@ -146,8 +155,11 @@ for src in $WINE_SRC/dlls/ntdll/unix/*.c; do
         cdrom)
             compile_one "$BUILD_DIR/cdrom_stub.c" "cdrom"
             ;;
+        file)
+            compile_one "$OBJ_DIR/file_smb_ios.c" "file"
+            ;;
         virtual)
-            compile_one "$BUILD_DIR/virtual_ios.c" "virtual"
+            compile_one "$OBJ_DIR/virtual_smb_ios.c" "virtual"
             ;;
         signal_arm64)
             compile_one "$BUILD_DIR/signal_arm64_ios.c" "signal_arm64"
@@ -167,9 +179,12 @@ if [ -n "$FAILED_FILES" ]; then
     echo "Failed:$FAILED_FILES"
 fi
 
+# Do not allow the direct-SMB hooks to silently disappear.
+test -f "$OBJ_DIR/file.o" -a -f "$OBJ_DIR/virtual.o" || { echo "FATAL: SMB-patched Wine objects missing"; exit 1; }
+
 echo ""
-echo "=== Building libntdll_unix.a ==="
-ar rcs "$OBJ_DIR/libntdll_unix.a" \
+echo "=== Building libntdll_unix + libsmb2 ==="
+ar rcs "$OBJ_DIR/libntdll_base.a" \
     "$OBJ_DIR/audio_null_ios.o" "$OBJ_DIR/nsi_unixlib_ios.o" "$OBJ_DIR/xinput_ios.o" \
     "$OBJ_DIR/gnutls_symtab_ios.o" "$OBJ_DIR/ws2_32_unixlib.o" \
     "$OBJ_DIR/bcrypt_unixlib.o" "$OBJ_DIR/secur32_unixlib.o" "$OBJ_DIR/crypt32_unixlib.o" \
@@ -181,7 +196,8 @@ ar rcs "$OBJ_DIR/libntdll_unix.a" \
     "$OBJ_DIR/socket.o" "$OBJ_DIR/sync.o" "$OBJ_DIR/syscall.o" "$OBJ_DIR/system.o" \
     "$OBJ_DIR/tape.o" "$OBJ_DIR/thread.o" "$OBJ_DIR/virtual.o"
 
-echo "Copying to app..."
-cp "$OBJ_DIR/libntdll_unix.a" "$APP_LIB"
-echo "libntdll_unix.a: $(wc -c < "$APP_LIB" | tr -d ' ') bytes"
+# Merge libsmb2 into the archive already linked by the Xcode target.
+/usr/bin/libtool -static -o "$APP_LIB" "$OBJ_DIR/libntdll_base.a" "$SMB2_LIB"
+ranlib "$APP_LIB"
+echo "libntdll_unix+libsmb2.a: $(wc -c < "$APP_LIB" | tr -d ' ') bytes"
 echo "Done!"
