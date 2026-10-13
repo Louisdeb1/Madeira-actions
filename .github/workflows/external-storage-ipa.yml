@@ -1,4 +1,4 @@
-name: Build Madeira v0.1.2 Native EXE + Game Mode + ProMotion
+name: Build Madeira v0.1.2 Game Folder + Game Mode + ProMotion
 
 on:
   workflow_dispatch:
@@ -67,69 +67,31 @@ jobs:
             codesign -d --entitlements :- "$APP/PlugIns/MadeiraJITHelper.appex" > /tmp/helper-entitlements.plist 2>/dev/null || true
           fi
 
-      - name: Enable Game Mode ProMotion and native Windows EXE documents
+      - name: Enable Game Mode ProMotion and folder access
         shell: bash
         run: |
           set -euxo pipefail
           APP=/tmp/madeira-work/Payload/Madeira.app
           PLIST="$APP/Info.plist"
 
-          python3 - "$PLIST" <<'PY'
-          import plistlib, sys
-          path = sys.argv[1]
-          with open(path, 'rb') as f:
-              p = plistlib.load(f)
-
-          p['LSSupportsGameMode'] = True
-          p['CADisableMinimumFrameDurationOnPhone'] = True
-          p['LSApplicationCategoryType'] = 'public.app-category.games'
-          p['LSSupportsOpeningDocumentsInPlace'] = True
-
-          # Remove our previous custom EXE UTI. iOS 27 already defines
-          # UTType.exe natively as public.windows-executable.
-          custom = 'com.louisdeb.windows-executable'
-          p['UTImportedTypeDeclarations'] = [
-              x for x in p.get('UTImportedTypeDeclarations', [])
-              if x.get('UTTypeIdentifier') != custom
-          ]
-          if not p['UTImportedTypeDeclarations']:
-              p.pop('UTImportedTypeDeclarations', None)
-
-          native = 'public.windows-executable'
-          legacy = 'com.microsoft.windows-executable'
-          docs = []
-          for x in p.get('CFBundleDocumentTypes', []):
-              types = x.get('LSItemContentTypes', [])
-              if custom in types or native in types or legacy in types:
-                  continue
-              docs.append(x)
-          docs.append({
-              'CFBundleTypeName': 'Windows Executable',
-              'CFBundleTypeRole': 'Viewer',
-              'LSHandlerRank': 'Alternate',
-              'LSItemContentTypes': [native, legacy],
-          })
-          p['CFBundleDocumentTypes'] = docs
-
-          with open(path, 'wb') as f:
-              plistlib.dump(p, f, fmt=plistlib.FMT_BINARY, sort_keys=False)
-          PY
+          /usr/libexec/PlistBuddy -c "Set :LSSupportsGameMode true" "$PLIST" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c "Add :LSSupportsGameMode bool true" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CADisableMinimumFrameDurationOnPhone true" "$PLIST" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c "Add :CADisableMinimumFrameDurationOnPhone bool true" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :LSApplicationCategoryType public.app-category.games" "$PLIST" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c "Add :LSApplicationCategoryType string public.app-category.games" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :LSSupportsOpeningDocumentsInPlace true" "$PLIST" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c "Add :LSSupportsOpeningDocumentsInPlace bool true" "$PLIST"
 
           test "$(/usr/libexec/PlistBuddy -c 'Print :LSSupportsGameMode' "$PLIST")" = "true"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CADisableMinimumFrameDurationOnPhone' "$PLIST")" = "true"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :LSSupportsOpeningDocumentsInPlace' "$PLIST")" = "true"
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleDocumentTypes' "$PLIST" | grep -q 'public.windows-executable'
 
-      - name: Inject native EXE external-storage launcher
+      - name: Inject recursive game-folder launcher
         shell: bash
         run: |
           set -euxo pipefail
           APP=/tmp/madeira-work/Payload/Madeira.app
           SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
-          SRC="$GITHUB_WORKSPACE/external-storage/ExternalStorageOverlay.m"
-
-          grep -q 'UTTypeEXE' "$SRC"
-          grep -q 'allowsMultipleSelection = YES' "$SRC"
 
           cp "$APP/Madeira.debug.dylib" "$APP/Morig.dylib"
           install_name_tool -id '@loader_path/Morig.dylib' "$APP/Morig.dylib"
@@ -145,12 +107,13 @@ jobs:
             -framework QuartzCore \
             -Wl,-reexport_library,"$APP/Morig.dylib" \
             -Wl,-install_name,@rpath/Madeira.debug.dylib \
-            "$SRC" \
+            "$GITHUB_WORKSPACE/external-storage/ExternalStorageOverlay.m" \
             -o "$APP/Madeira.debug.dylib"
 
           otool -L "$APP/Madeira.debug.dylib"
           nm -gU "$APP/Madeira.debug.dylib" | grep -E 'wine_process_start|wineserver_start' || true
-          strings "$APP/Madeira.debug.dylib" | grep -q 'EXE NATIF'
+          strings "$APP/Madeira.debug.dylib" | grep -q 'DOSSIER JEU'
+          strings "$APP/Madeira.debug.dylib" | grep -q 'Dossier autorisé récursivement'
           strings "$APP/Madeira.debug.dylib" | grep -q '__ExternalGame'
           strings "$APP/Madeira.debug.dylib" | grep -q 'MADEIRA_EXTERNAL_ROOT'
 
@@ -188,15 +151,15 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/out/Payload"
           ditto /tmp/madeira-work/Payload/Madeira.app "$GITHUB_WORKSPACE/out/Payload/Madeira.app"
           cd "$GITHUB_WORKSPACE/out"
-          zip -qry Madeira-v0.1.2-NativeEXE-GameMode-ProMotion.ipa Payload
-          shasum -a 256 Madeira-v0.1.2-NativeEXE-GameMode-ProMotion.ipa | tee Madeira-v0.1.2-NativeEXE-GameMode-ProMotion.ipa.sha256
-          ls -lh Madeira-v0.1.2-NativeEXE-GameMode-ProMotion.ipa
+          zip -qry Madeira-v0.1.2-GameFolder-GameMode-ProMotion.ipa Payload
+          shasum -a 256 Madeira-v0.1.2-GameFolder-GameMode-ProMotion.ipa | tee Madeira-v0.1.2-GameFolder-GameMode-ProMotion.ipa.sha256
+          ls -lh Madeira-v0.1.2-GameFolder-GameMode-ProMotion.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Madeira-v0.1.2-NativeEXE-GameMode-ProMotion
+          name: Madeira-v0.1.2-GameFolder-GameMode-ProMotion
           path: |
-            out/Madeira-v0.1.2-NativeEXE-GameMode-ProMotion.ipa
-            out/Madeira-v0.1.2-NativeEXE-GameMode-ProMotion.ipa.sha256
+            out/Madeira-v0.1.2-GameFolder-GameMode-ProMotion.ipa
+            out/Madeira-v0.1.2-GameFolder-GameMode-ProMotion.ipa.sha256
           if-no-files-found: error
