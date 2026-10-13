@@ -1,28 +1,23 @@
 /*
  * ExternalSMBPickerFix.inc
  *
- * Fixes the folder picker hand-off used by ExternalSMBStorage.inc.
- * The old implementation could present UIDocumentPickerViewController while
- * the action sheet was still being dismissed. On device this can leave the
- * picker visible but with "Open" failing to complete the selection callback.
- *
- * This fix:
- *  - always dismisses any UIAlertController before presenting Files
- *  - presents the picker full-screen from the real top controller
- *  - retains the picker strongly until callback/cancel
- *  - logs and forwards both modern and legacy picker callbacks
- *  - stores a real security-scoped bookmark, not a minimal bookmark
- *  - resolves bookmarks with NSURLBookmarkResolutionWithSecurityScope
+ * iOS fix for the external-folder picker hand-off used by ExternalSMBStorage.
+ * The picker is presented only after the action sheet is fully dismissed.
+ * iOS security-scoped bookmarks use the normal bookmark APIs here; the explicit
+ * WithSecurityScope flags are macOS/Catalyst-only and unavailable on iOS.
  */
 
 #import <objc/runtime.h>
 
 static UIDocumentPickerViewController *mx_smb_active_picker = nil;
 
-@interface MXSMBExternalStorage (PickerFix)
+@interface MXSMBExternalStorage (PickerFixDependencies)
 - (UIViewController *)topController;
 - (BOOL)attachRootURL:(NSURL *)url persist:(BOOL)persist;
 - (void)validateStoredExecutable;
+@end
+
+@interface MXSMBExternalStorage (PickerFix)
 - (void)mx_fixed_pickFolder;
 - (BOOL)mx_fixed_saveBookmarkForURL:(NSURL *)url;
 - (void)mx_fixed_restoreBookmarkIfPresent;
@@ -125,21 +120,10 @@ static void mx_smb_swap_instance_method(Class cls, SEL original, SEL replacement
 - (BOOL)mx_fixed_saveBookmarkForURL:(NSURL *)url
 {
     NSError *error = nil;
-    NSData *bookmark = [url bookmarkDataWithOptions:NSURLBookmarkCreationWithSecurityScope
+    NSData *bookmark = [url bookmarkDataWithOptions:0
                          includingResourceValuesForKeys:nil
                                           relativeToURL:nil
                                                   error:&error];
-
-    if (!bookmark) {
-        mx_smb_log(@"SecurityScope", @"security-scoped bookmark FAILED (%@); retrying implicit scope",
-                   error.localizedDescription ?: @"unknown");
-        error = nil;
-        bookmark = [url bookmarkDataWithOptions:0
-                     includingResourceValuesForKeys:nil
-                                      relativeToURL:nil
-                                              error:&error];
-    }
-
     if (!bookmark) {
         mx_smb_log(@"SecurityScope", @"bookmark save FAILED: %@", error.localizedDescription ?: @"unknown");
         return NO;
@@ -149,7 +133,7 @@ static void mx_smb_swap_instance_method(Class cls, SEL original, SEL replacement
     [d setObject:bookmark forKey:MXSMBBookmarkKey];
     [d setObject:url.lastPathComponent ?: @"External" forKey:MXSMBNameKey];
     [d synchronize];
-    mx_smb_log(@"SecurityScope", @"bookmark saved with security scope bytes=%lu", (unsigned long)bookmark.length);
+    mx_smb_log(@"SecurityScope", @"iOS bookmark saved bytes=%lu", (unsigned long)bookmark.length);
     return YES;
 }
 
@@ -165,35 +149,21 @@ static void mx_smb_swap_instance_method(Class cls, SEL original, SEL replacement
 
     BOOL stale = NO;
     NSError *error = nil;
-    NSURLBookmarkResolutionOptions options = NSURLBookmarkResolutionWithSecurityScope | NSURLBookmarkResolutionWithoutUI;
     NSURL *url = [NSURL URLByResolvingBookmarkData:bookmark
-                                           options:options
+                                           options:NSURLBookmarkResolutionWithoutUI
                                      relativeToURL:nil
                                bookmarkDataIsStale:&stale
                                              error:&error];
-
-    if (!url) {
-        mx_smb_log(@"SecurityScope", @"security-scope resolution failed (%@); retrying legacy bookmark",
-                   error.localizedDescription ?: @"unknown");
-        error = nil;
-        stale = NO;
-        url = [NSURL URLByResolvingBookmarkData:bookmark
-                                        options:NSURLBookmarkResolutionWithoutUI
-                                  relativeToURL:nil
-                            bookmarkDataIsStale:&stale
-                                          error:&error];
-    }
-
     if (!url) {
         mx_smb_log(@"SecurityScope", @"bookmark resolve FAILED: %@", error.localizedDescription ?: @"unknown");
         return;
     }
 
-    mx_smb_log(@"SecurityScope", @"bookmark FIX resolved stale=%@ path=%@",
+    mx_smb_log(@"SecurityScope", @"iOS bookmark resolved stale=%@ path=%@",
                stale ? @"YES" : @"NO", url.path ?: @"<nil>");
 
     if ([self attachRootURL:url persist:stale]) {
-        if (stale) mx_smb_log(@"SecurityScope", @"stale bookmark recreated with security scope");
+        if (stale) mx_smb_log(@"SecurityScope", @"stale bookmark recreated");
         [self validateStoredExecutable];
     }
 }
