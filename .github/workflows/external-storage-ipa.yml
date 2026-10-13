@@ -1,4 +1,4 @@
-name: Build Madeira v0.1.2 External Storage + Game Mode + ProMotion
+name: Build Madeira v0.1.2 Native EXE + Game Mode + ProMotion
 
 on:
   workflow_dispatch:
@@ -67,7 +67,7 @@ jobs:
             codesign -d --entitlements :- "$APP/PlugIns/MadeiraJITHelper.appex" > /tmp/helper-entitlements.plist 2>/dev/null || true
           fi
 
-      - name: Enable Game Mode ProMotion and EXE documents
+      - name: Enable Game Mode ProMotion and native Windows EXE documents
         shell: bash
         run: |
           set -euxo pipefail
@@ -85,27 +85,29 @@ jobs:
           p['LSApplicationCategoryType'] = 'public.app-category.games'
           p['LSSupportsOpeningDocumentsInPlace'] = True
 
-          ident = 'com.louisdeb.windows-executable'
-          imported = [x for x in p.get('UTImportedTypeDeclarations', [])
-                      if x.get('UTTypeIdentifier') != ident]
-          imported.append({
-              'UTTypeIdentifier': ident,
-              'UTTypeDescription': 'Windows Executable',
-              'UTTypeConformsTo': ['public.data'],
-              'UTTypeTagSpecification': {
-                  'public.filename-extension': ['exe'],
-                  'public.mime-type': ['application/vnd.microsoft.portable-executable', 'application/x-msdownload'],
-              },
-          })
-          p['UTImportedTypeDeclarations'] = imported
+          # Remove our previous custom EXE UTI. iOS 27 already defines
+          # UTType.exe natively as public.windows-executable.
+          custom = 'com.louisdeb.windows-executable'
+          p['UTImportedTypeDeclarations'] = [
+              x for x in p.get('UTImportedTypeDeclarations', [])
+              if x.get('UTTypeIdentifier') != custom
+          ]
+          if not p['UTImportedTypeDeclarations']:
+              p.pop('UTImportedTypeDeclarations', None)
 
-          docs = [x for x in p.get('CFBundleDocumentTypes', [])
-                  if ident not in x.get('LSItemContentTypes', [])]
+          native = 'public.windows-executable'
+          legacy = 'com.microsoft.windows-executable'
+          docs = []
+          for x in p.get('CFBundleDocumentTypes', []):
+              types = x.get('LSItemContentTypes', [])
+              if custom in types or native in types or legacy in types:
+                  continue
+              docs.append(x)
           docs.append({
               'CFBundleTypeName': 'Windows Executable',
               'CFBundleTypeRole': 'Viewer',
-              'LSHandlerRank': 'Owner',
-              'LSItemContentTypes': [ident],
+              'LSHandlerRank': 'Alternate',
+              'LSItemContentTypes': [native, legacy],
           })
           p['CFBundleDocumentTypes'] = docs
 
@@ -113,34 +115,21 @@ jobs:
               plistlib.dump(p, f, fmt=plistlib.FMT_BINARY, sort_keys=False)
           PY
 
-          /usr/libexec/PlistBuddy -c 'Print :LSSupportsGameMode' "$PLIST"
-          /usr/libexec/PlistBuddy -c 'Print :CADisableMinimumFrameDurationOnPhone' "$PLIST"
-          /usr/libexec/PlistBuddy -c 'Print :LSSupportsOpeningDocumentsInPlace' "$PLIST"
-          /usr/libexec/PlistBuddy -c 'Print :UTImportedTypeDeclarations' "$PLIST" | grep -q 'com.louisdeb.windows-executable'
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleDocumentTypes' "$PLIST" | grep -q 'com.louisdeb.windows-executable'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSSupportsGameMode' "$PLIST")" = "true"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CADisableMinimumFrameDurationOnPhone' "$PLIST")" = "true"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSSupportsOpeningDocumentsInPlace' "$PLIST")" = "true"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleDocumentTypes' "$PLIST" | grep -q 'public.windows-executable'
 
-      - name: Inject direct EXE external-storage launcher
+      - name: Inject native EXE external-storage launcher
         shell: bash
         run: |
           set -euxo pipefail
           APP=/tmp/madeira-work/Payload/Madeira.app
           SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
           SRC="$GITHUB_WORKSPACE/external-storage/ExternalStorageOverlay.m"
-          BUILD_SRC=/tmp/ExternalStorageOverlay.m
 
-          cp "$SRC" "$BUILD_SRC"
-          python3 - "$BUILD_SRC" <<'PY'
-          import sys
-          p = sys.argv[1]
-          s = open(p, encoding='utf-8').read()
-          old = 'initForOpeningContentTypes:@[UTTypeItem] asCopy:NO'
-          new = 'initForOpeningContentTypes:@[[UTType importedTypeWithIdentifier:@"com.louisdeb.windows-executable" conformingToType:UTTypeData]] asCopy:NO'
-          if old not in s:
-              raise SystemExit('picker pattern not found')
-          s = s.replace(old, new)
-          open(p, 'w', encoding='utf-8').write(s)
-          PY
-          grep -q 'com.louisdeb.windows-executable' "$BUILD_SRC"
+          grep -q 'UTTypeEXE' "$SRC"
+          grep -q 'allowsMultipleSelection = YES' "$SRC"
 
           cp "$APP/Madeira.debug.dylib" "$APP/Morig.dylib"
           install_name_tool -id '@loader_path/Morig.dylib' "$APP/Morig.dylib"
@@ -156,15 +145,14 @@ jobs:
             -framework QuartzCore \
             -Wl,-reexport_library,"$APP/Morig.dylib" \
             -Wl,-install_name,@rpath/Madeira.debug.dylib \
-            "$BUILD_SRC" \
+            "$SRC" \
             -o "$APP/Madeira.debug.dylib"
 
           otool -L "$APP/Madeira.debug.dylib"
           nm -gU "$APP/Madeira.debug.dylib" | grep -E 'wine_process_start|wineserver_start' || true
-          strings "$APP/Madeira.debug.dylib" | grep -q 'SSD + EXE'
+          strings "$APP/Madeira.debug.dylib" | grep -q 'EXE NATIF'
           strings "$APP/Madeira.debug.dylib" | grep -q '__ExternalGame'
           strings "$APP/Madeira.debug.dylib" | grep -q 'MADEIRA_EXTERNAL_ROOT'
-          strings "$APP/Madeira.debug.dylib" | grep -q 'com.louisdeb.windows-executable'
 
       - name: Ad-hoc sign modified bundle
         shell: bash
@@ -200,15 +188,15 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/out/Payload"
           ditto /tmp/madeira-work/Payload/Madeira.app "$GITHUB_WORKSPACE/out/Payload/Madeira.app"
           cd "$GITHUB_WORKSPACE/out"
-          zip -qry Madeira-v0.1.2-EXE-TypeFix-GameMode-ProMotion.ipa Payload
-          shasum -a 256 Madeira-v0.1.2-EXE-TypeFix-GameMode-ProMotion.ipa | tee Madeira-v0.1.2-EXE-TypeFix-GameMode-ProMotion.ipa.sha256
-          ls -lh Madeira-v0.1.2-EXE-TypeFix-GameMode-ProMotion.ipa
+          zip -qry Madeira-v0.1.2-NativeEXE-GameMode-ProMotion.ipa Payload
+          shasum -a 256 Madeira-v0.1.2-NativeEXE-GameMode-ProMotion.ipa | tee Madeira-v0.1.2-NativeEXE-GameMode-ProMotion.ipa.sha256
+          ls -lh Madeira-v0.1.2-NativeEXE-GameMode-ProMotion.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Madeira-v0.1.2-EXE-TypeFix-GameMode-ProMotion
+          name: Madeira-v0.1.2-NativeEXE-GameMode-ProMotion
           path: |
-            out/Madeira-v0.1.2-EXE-TypeFix-GameMode-ProMotion.ipa
-            out/Madeira-v0.1.2-EXE-TypeFix-GameMode-ProMotion.ipa.sha256
+            out/Madeira-v0.1.2-NativeEXE-GameMode-ProMotion.ipa
+            out/Madeira-v0.1.2-NativeEXE-GameMode-ProMotion.ipa.sha256
           if-no-files-found: error
