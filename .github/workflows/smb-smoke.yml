@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "app/Madeira/ExternalSMBStorage.inc"
+      - "app/Madeira/ExternalSMBPickerFix.inc"
       - "app/Madeira/IOSDisplayShim.m"
       - ".github/workflows/smb-smoke.yml"
   workflow_dispatch:
