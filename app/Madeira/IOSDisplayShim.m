@@ -196,3 +196,8 @@ __attribute__((used, visibility("default")))
 void macdrv_view_release_metal_view(macdrv_metal_view v) {
     my_view_release_metal_view(v);
 }
+
+/* Source-level external SMB / File Provider game support. The implementation
+   lives in a separate .inc so it is easy to audit while still compiling into
+   the normal Madeira target without injecting a post-build dylib. */
+#include "ExternalSMBStorage.inc"
