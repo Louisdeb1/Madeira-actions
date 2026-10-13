@@ -13,9 +13,7 @@ extern int wine_process_is_running(void);
 
 @interface MXExternalLauncher : NSObject <UIDocumentPickerDelegate>
 @property(nonatomic,strong) UIButton *button;
-@property(nonatomic,strong) NSURL *scopedEXE;
 @property(nonatomic,strong) NSURL *scopedRoot;
-@property(nonatomic,assign) BOOL exeScopeStarted;
 @property(nonatomic,assign) BOOL rootScopeStarted;
 @end
 
@@ -82,17 +80,17 @@ extern int wine_process_is_running(void);
         if (self.button.superview) { [w bringSubviewToFront:self.button]; return; }
 
         UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
-        b.frame = CGRectMake(MAX(12.0, w.bounds.size.width - 108.0), w.safeAreaInsets.top + 8.0, 96.0, 44.0);
+        b.frame = CGRectMake(MAX(12.0, w.bounds.size.width - 118.0), w.safeAreaInsets.top + 8.0, 106.0, 44.0);
         b.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleBottomMargin;
-        [b setTitle:@"EXE NATIF" forState:UIControlStateNormal];
-        b.titleLabel.font = [UIFont boldSystemFontOfSize:12.0];
+        [b setTitle:@"DOSSIER JEU" forState:UIControlStateNormal];
+        b.titleLabel.font = [UIFont boldSystemFontOfSize:11.5];
         b.backgroundColor = [UIColor colorWithRed:0.08 green:0.42 blue:0.95 alpha:0.96];
         [b setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
         b.layer.cornerRadius = 14.0;
         b.layer.borderWidth = 1.0;
         b.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.32].CGColor;
-        b.accessibilityLabel = @"Choisir un EXE Windows avec le type natif Apple";
-        [b addTarget:self action:@selector(pickExecutable) forControlEvents:UIControlEventTouchUpInside];
+        b.accessibilityLabel = @"Autoriser le dossier complet du jeu sur USB ou SSD";
+        [b addTarget:self action:@selector(pickGameFolder) forControlEvents:UIControlEventTouchUpInside];
         [w addSubview:b];
         [w bringSubviewToFront:b];
         self.button = b;
@@ -100,7 +98,7 @@ extern int wine_process_is_running(void);
     });
 }
 
-- (void)pickExecutable {
+- (void)pickGameFolder {
     if (wine_process_is_running()) {
         [self alert:@"Madeira" message:@"Un jeu est déjà en cours. Ferme-le avant d'en lancer un autre."];
         return;
@@ -108,98 +106,142 @@ extern int wine_process_is_running(void);
     UIViewController *vc = [self topController];
     if (!vc) return;
 
-    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeEXE] asCopy:NO];
+    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeFolder] asCopy:NO];
     picker.delegate = self;
-    // iOS affiche alors une selection + le bouton Ouvrir au lieu de fermer immediatement sur un tap.
     picker.allowsMultipleSelection = YES;
-    if ([picker respondsToSelector:@selector(setShouldShowFileExtensions:)]) picker.shouldShowFileExtensions = YES;
     [vc presentViewController:picker animated:YES completion:nil];
 }
 
 - (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {}
 
 - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
-    NSURL *exe = nil;
-    for (NSURL *candidate in urls) {
-        if ([candidate.pathExtension.lowercaseString isEqualToString:@"exe"]) { exe = candidate; break; }
-    }
-    if (!exe) {
-        [self alert:@"Pas un EXE" message:@"Selectionne un fichier Windows .exe, puis touche Ouvrir."];
-        return;
-    }
+    NSArray<NSURL *> *picked = [urls copy];
+    __weak typeof(self) weakSelf = self;
 
-    if (self.exeScopeStarted && self.scopedEXE) [self.scopedEXE stopAccessingSecurityScopedResource];
-    if (self.rootScopeStarted && self.scopedRoot) [self.scopedRoot stopAccessingSecurityScopedResource];
-    self.scopedEXE = exe;
-    self.scopedRoot = nil;
-    self.exeScopeStarted = [exe startAccessingSecurityScopedResource];
-    self.rootScopeStarted = NO;
-
-    [self offerAccessibleRootsForExecutable:exe];
-}
-
-- (BOOL)directoryReadable:(NSURL *)dir {
-    if (!dir || !dir.isFileURL) return NO;
-    NSNumber *isDir = nil;
-    NSError *metaError = nil;
-    if (![dir getResourceValue:&isDir forKey:NSURLIsDirectoryKey error:&metaError] || !isDir.boolValue) return NO;
-
-    __block BOOL ok = NO;
-    NSFileCoordinator *coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
-    NSError *coordError = nil;
-    [coordinator coordinateReadingItemAtURL:dir options:0 error:&coordError byAccessor:^(NSURL *newURL) {
-        NSError *e = nil;
-        NSArray *items = [NSFileManager.defaultManager contentsOfDirectoryAtURL:newURL
-                                                    includingPropertiesForKeys:@[NSURLNameKey]
-                                                                       options:NSDirectoryEnumerationSkipsHiddenFiles
-                                                                         error:&e];
-        ok = (items != nil);
+    [controller dismissViewControllerAnimated:YES completion:^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.30 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [weakSelf acceptPickedFolders:picked];
+        });
     }];
-    return ok && coordError == nil;
 }
 
-- (NSString *)shortPathForURL:(NSURL *)url {
-    NSArray<NSString *> *c = url.pathComponents;
-    if (c.count <= 3) return url.path;
-    NSUInteger start = c.count - MIN((NSUInteger)3, c.count);
-    return [[c subarrayWithRange:NSMakeRange(start, c.count - start)] componentsJoinedByString:@"/"];
-}
-
-- (void)offerAccessibleRootsForExecutable:(NSURL *)exe {
-    NSMutableArray<NSURL *> *roots = [NSMutableArray array];
-    NSURL *dir = exe.URLByDeletingLastPathComponent;
-
-    for (NSInteger i = 0; i < 5 && dir; i++) {
-        BOOL started = [dir startAccessingSecurityScopedResource];
-        BOOL readable = [self directoryReadable:dir];
-        if (started) [dir stopAccessingSecurityScopedResource];
-        if (readable) [roots addObject:dir];
-
-        NSURL *parent = dir.URLByDeletingLastPathComponent;
-        if (!parent || [parent.path isEqualToString:dir.path] || [parent.path isEqualToString:@"/"]) break;
-        dir = parent;
-    }
-
-    if (roots.count == 0) {
-        [self alert:@"EXE ouvert, dossier bloque"
-            message:@"Le .exe a bien ete transmis a Madeira, mais iOS n'accorde pas l'acces a ses fichiers voisins. Il faut alors passer a un vrai montage de dossier plutot qu'au fichier seul."];
+- (void)acceptPickedFolders:(NSArray<NSURL *> *)urls {
+    if (urls.count != 1) {
+        [self alert:@"Un seul dossier" message:@"Sélectionne uniquement le dossier racine du jeu, puis touche Ouvrir."];
         return;
     }
+
+    NSURL *root = urls.firstObject;
+    NSNumber *isDir = nil;
+    if (!root.isFileURL || ![root getResourceValue:&isDir forKey:NSURLIsDirectoryKey error:nil] || !isDir.boolValue) {
+        [self alert:@"Dossier invalide" message:@"Il faut sélectionner le dossier complet du jeu, pas un fichier .exe."];
+        return;
+    }
+
+    if (self.rootScopeStarted && self.scopedRoot) {
+        [self.scopedRoot stopAccessingSecurityScopedResource];
+    }
+    self.scopedRoot = root;
+    self.rootScopeStarted = [root startAccessingSecurityScopedResource];
+
+    if (!self.rootScopeStarted) {
+        [self alert:@"Autorisation refusée" message:@"iOS n'a pas accordé l'accès security-scoped au dossier. Madeira ne pourrait pas lire les DLL/DATA du jeu."];
+        return;
+    }
+
+    [self scanRootAndChooseExecutable:root];
+}
+
+- (void)scanRootAndChooseExecutable:(NSURL *)root {
+    NSMutableArray<NSURL *> *executables = [NSMutableArray array];
+    NSFileCoordinator *coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
+    __block NSError *scanError = nil;
+    NSError *coordError = nil;
+
+    [coordinator coordinateReadingItemAtURL:root options:0 error:&coordError byAccessor:^(NSURL *newRoot) {
+        NSFileManager *fm = NSFileManager.defaultManager;
+        NSArray *keys = @[NSURLIsDirectoryKey, NSURLNameKey];
+        NSDirectoryEnumerator<NSURL *> *en = [fm enumeratorAtURL:newRoot
+                                      includingPropertiesForKeys:keys
+                                                         options:NSDirectoryEnumerationSkipsHiddenFiles
+                                                    errorHandler:^BOOL(__unused NSURL *url, NSError *error) {
+            scanError = error;
+            return YES;
+        }];
+
+        NSString *base = newRoot.standardizedURL.path;
+        for (NSURL *u in en) {
+            if (executables.count >= 120) break;
+
+            NSString *path = u.standardizedURL.path;
+            NSString *relative = [path hasPrefix:base] ? [path substringFromIndex:base.length] : path;
+            NSUInteger depth = relative.pathComponents.count;
+
+            NSNumber *isDirectory = nil;
+            [u getResourceValue:&isDirectory forKey:NSURLIsDirectoryKey error:nil];
+            if (isDirectory.boolValue && depth > 10) {
+                [en skipDescendants];
+                continue;
+            }
+            if (!isDirectory.boolValue && [u.pathExtension.lowercaseString isEqualToString:@"exe"]) {
+                [executables addObject:u];
+            }
+        }
+    }];
+
+    if (coordError && executables.count == 0) {
+        [self alert:@"Lecture du dossier impossible" message:coordError.localizedDescription ?: @"NSFileCoordinator a refusé la lecture du dossier externe."];
+        return;
+    }
+    if (executables.count == 0) {
+        NSString *msg = scanError ? [NSString stringWithFormat:@"Aucun .exe trouvé. Dernière erreur : %@", scanError.localizedDescription] : @"Aucun fichier .exe n'a été trouvé dans ce dossier ou ses sous-dossiers.";
+        [self alert:@"Aucun EXE" message:msg];
+        return;
+    }
+
+    NSInteger (^score)(NSURL *) = ^NSInteger(NSURL *u) {
+        NSString *n = u.lastPathComponent.lowercaseString;
+        NSInteger s = 0;
+        if ([n isEqualToString:@"launcher.exe"]) s += 1000;
+        if ([n containsString:@"launcher"]) s += 500;
+        if ([n containsString:@"tlou"] || [n containsString:@"lastofus"] || [n containsString:@"last_of_us"]) s += 400;
+        if ([n containsString:@"game"]) s += 200;
+        if ([n containsString:@"crash"] || [n containsString:@"report"] || [n containsString:@"unins"] || [n containsString:@"setup"]) s -= 300;
+        return s;
+    };
+
+    [executables sortUsingComparator:^NSComparisonResult(NSURL *a, NSURL *b) {
+        NSInteger sa = score(a), sb = score(b);
+        if (sa != sb) return sa > sb ? NSOrderedAscending : NSOrderedDescending;
+        return [a.path localizedCaseInsensitiveCompare:b.path];
+    }];
 
     UIViewController *vc = [self topController];
     if (!vc) return;
 
-    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"Dossier racine du jeu"
-                                                                   message:@"Choisis le dossier qui contient tout le jeu. Pour Unreal, prends normalement le dossier AU-DESSUS de Binaries."
+    NSString *message = [NSString stringWithFormat:@"Dossier autorisé récursivement. %lu EXE trouvé%@. Choisis celui à lancer.", (unsigned long)executables.count, executables.count > 1 ? @"s" : @""];
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"EXE du jeu"
+                                                                   message:message
                                                             preferredStyle:UIAlertControllerStyleActionSheet];
     __weak typeof(self) weakSelf = self;
-    for (NSURL *root in roots) {
-        NSString *label = [self shortPathForURL:root];
-        [sheet addAction:[UIAlertAction actionWithTitle:label style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *a) {
+    NSUInteger shown = MIN((NSUInteger)40, executables.count);
+    NSString *rootPath = root.standardizedURL.path;
+    NSString *prefix = [rootPath hasSuffix:@"/"] ? rootPath : [rootPath stringByAppendingString:@"/"];
+
+    for (NSUInteger i = 0; i < shown; i++) {
+        NSURL *exe = executables[i];
+        NSString *ep = exe.standardizedURL.path;
+        NSString *relative = [ep hasPrefix:prefix] ? [ep substringFromIndex:prefix.length] : exe.lastPathComponent;
+        NSString *title = relative.length > 80 ? [NSString stringWithFormat:@"…%@", [relative substringFromIndex:relative.length - 79]] : relative;
+        [sheet addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *a) {
             [weakSelf launchExecutable:exe root:root];
         }]];
     }
+    if (executables.count > shown) {
+        [sheet addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%lu autres EXE non affichés", (unsigned long)(executables.count - shown)] style:UIAlertActionStyleDefault handler:nil]];
+    }
     [sheet addAction:[UIAlertAction actionWithTitle:@"Annuler" style:UIAlertActionStyleCancel handler:nil]];
+
     UIPopoverPresentationController *pop = sheet.popoverPresentationController;
     if (pop) {
         pop.sourceView = self.button ?: vc.view;
@@ -209,26 +251,22 @@ extern int wine_process_is_running(void);
 }
 
 - (void)launchExecutable:(NSURL *)exe root:(NSURL *)root {
+    if (!self.rootScopeStarted || ![self.scopedRoot.path isEqualToString:root.path]) {
+        [self alert:@"Accès dossier perdu" message:@"L'autorisation du dossier n'est plus active. Resélectionne le dossier du jeu."];
+        return;
+    }
+
     NSString *exePath = exe.standardizedURL.path;
     NSString *rootPath = root.standardizedURL.path;
     NSString *prefixWithSlash = [rootPath hasSuffix:@"/"] ? rootPath : [rootPath stringByAppendingString:@"/"];
     if (![exePath hasPrefix:prefixWithSlash]) {
-        [self alert:@"Chemin invalide" message:@"Le .exe n'est pas contenu dans le dossier choisi."];
-        return;
-    }
-
-    if (self.rootScopeStarted && self.scopedRoot) [self.scopedRoot stopAccessingSecurityScopedResource];
-    self.scopedRoot = root;
-    self.rootScopeStarted = [root startAccessingSecurityScopedResource];
-
-    if (![self directoryReadable:root]) {
-        [self alert:@"Acces perdu" message:@"iOS ne permet plus de lire le dossier choisi. Le jeu ne pourrait pas charger ses DLL et DATA."];
+        [self alert:@"Chemin invalide" message:@"Le .exe choisi n'est pas contenu dans le dossier autorisé."];
         return;
     }
 
     NSString *relative = [exePath substringFromIndex:prefixWithSlash.length];
     if (!relative.length || ![relative canBeConvertedToEncoding:NSASCIIStringEncoding]) {
-        [self alert:@"Chemin EXE" message:@"Le chemin relatif du .exe doit utiliser des caracteres ASCII pour cette build."];
+        [self alert:@"Chemin EXE" message:@"Le chemin relatif du .exe doit utiliser des caractères ASCII pour cette build."];
         return;
     }
     NSString *winRelative = [relative stringByReplacingOccurrencesOfString:@"/" withString:@"\\"];
@@ -245,7 +283,13 @@ extern int wine_process_is_running(void);
     [fm removeItemAtPath:link error:nil];
     err = nil;
     if (![fm createSymbolicLinkAtPath:link withDestinationPath:rootPath error:&err]) {
-        [self alert:@"Montage SSD impossible" message:err.localizedDescription ?: @"Impossible de creer le lien vers le dossier du jeu."];
+        [self alert:@"Montage SSD impossible" message:err.localizedDescription ?: @"Impossible de créer le lien vers le dossier du jeu."];
+        return;
+    }
+
+    NSString *mountedEXE = [link stringByAppendingPathComponent:relative];
+    if (![fm fileExistsAtPath:mountedEXE]) {
+        [self alert:@"Test du montage échoué" message:@"Madeira a l'autorisation du dossier mais le .exe n'est pas visible à travers le montage __ExternalGame."];
         return;
     }
 
@@ -263,7 +307,7 @@ extern int wine_process_is_running(void);
     int ws = wineserver_is_running();
     if (!ws) {
         int rc = wineserver_start(prefix.fileSystemRepresentation);
-        if (rc != 0) { [self alert:@"wineserver" message:[NSString stringWithFormat:@"Impossible de demarrer wineserver (code %d).", rc]]; return; }
+        if (rc != 0) { [self alert:@"wineserver" message:[NSString stringWithFormat:@"Impossible de démarrer wineserver (code %d).", rc]]; return; }
     }
 
     __block NSInteger tries = 0;
@@ -274,16 +318,16 @@ extern int wine_process_is_running(void);
         if (wineserver_is_running()) {
             int rc = wine_process_start(prefix.fileSystemRepresentation);
             if (rc != 0) {
-                [weakSelf alert:@"Lancement impossible" message:[NSString stringWithFormat:@"wine_process_start a renvoye %d.", rc]];
+                [weakSelf alert:@"Lancement impossible" message:[NSString stringWithFormat:@"wine_process_start a renvoyé %d.", rc]];
             } else {
                 [weakSelf alert:@"Lancement externe"
-                         message:[NSString stringWithFormat:@"%@\n\nRacine montee : %@\n\nLe dossier reste ouvert pour Wine pendant le jeu.", exe.lastPathComponent, root.lastPathComponent]];
+                         message:[NSString stringWithFormat:@"%@\n\nDossier complet autorisé : %@\n\nWine garde l'accès récursif pendant la session.", exe.lastPathComponent, root.lastPathComponent]];
             }
             poll = nil;
             return;
         }
         if (tries >= 100) {
-            [weakSelf alert:@"wineserver" message:@"wineserver ne s'est pas declare pret."];
+            [weakSelf alert:@"wineserver" message:@"wineserver ne s'est pas déclaré prêt."];
             poll = nil;
             return;
         }
