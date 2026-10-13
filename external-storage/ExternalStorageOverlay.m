@@ -82,16 +82,16 @@ extern int wine_process_is_running(void);
         if (self.button.superview) { [w bringSubviewToFront:self.button]; return; }
 
         UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
-        b.frame = CGRectMake(MAX(12.0, w.bounds.size.width - 102.0), w.safeAreaInsets.top + 8.0, 90.0, 44.0);
+        b.frame = CGRectMake(MAX(12.0, w.bounds.size.width - 108.0), w.safeAreaInsets.top + 8.0, 96.0, 44.0);
         b.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleBottomMargin;
-        [b setTitle:@"SSD + EXE" forState:UIControlStateNormal];
+        [b setTitle:@"EXE NATIF" forState:UIControlStateNormal];
         b.titleLabel.font = [UIFont boldSystemFontOfSize:12.0];
         b.backgroundColor = [UIColor colorWithRed:0.08 green:0.42 blue:0.95 alpha:0.96];
         [b setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
         b.layer.cornerRadius = 14.0;
         b.layer.borderWidth = 1.0;
         b.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.32].CGColor;
-        b.accessibilityLabel = @"Choisir directement un EXE sur USB ou SSD";
+        b.accessibilityLabel = @"Choisir un EXE Windows avec le type natif Apple";
         [b addTarget:self action:@selector(pickExecutable) forControlEvents:UIControlEventTouchUpInside];
         [w addSubview:b];
         [w bringSubviewToFront:b];
@@ -108,9 +108,10 @@ extern int wine_process_is_running(void);
     UIViewController *vc = [self topController];
     if (!vc) return;
 
-    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeItem] asCopy:NO];
+    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeEXE] asCopy:NO];
     picker.delegate = self;
-    picker.allowsMultipleSelection = NO;
+    // iOS affiche alors une selection + le bouton Ouvrir au lieu de fermer immediatement sur un tap.
+    picker.allowsMultipleSelection = YES;
     if ([picker respondsToSelector:@selector(setShouldShowFileExtensions:)]) picker.shouldShowFileExtensions = YES;
     [vc presentViewController:picker animated:YES completion:nil];
 }
@@ -118,10 +119,12 @@ extern int wine_process_is_running(void);
 - (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {}
 
 - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
-    NSURL *exe = urls.firstObject;
-    if (!exe) return;
-    if (![exe.pathExtension.lowercaseString isEqualToString:@"exe"]) {
-        [self alert:@"Pas un EXE" message:@"Sélectionne directement le fichier .exe du jeu. Cette version n'utilise plus le sélecteur de dossier iOS."];
+    NSURL *exe = nil;
+    for (NSURL *candidate in urls) {
+        if ([candidate.pathExtension.lowercaseString isEqualToString:@"exe"]) { exe = candidate; break; }
+    }
+    if (!exe) {
+        [self alert:@"Pas un EXE" message:@"Selectionne un fichier Windows .exe, puis touche Ouvrir."];
         return;
     }
 
@@ -178,8 +181,8 @@ extern int wine_process_is_running(void);
     }
 
     if (roots.count == 0) {
-        [self alert:@"Accès dossier refusé"
-            message:@"iOS m'a donné accès au fichier .exe mais pas à son dossier. C'est exactement le bug du sélecteur de dossiers. Essaie avec le SSD/USB local dans Fichiers; si ça reste ainsi, iOS ne donne pas l'autorisation récursive nécessaire pour les DLL/DATA."];
+        [self alert:@"EXE ouvert, dossier bloque"
+            message:@"Le .exe a bien ete transmis a Madeira, mais iOS n'accorde pas l'acces a ses fichiers voisins. Il faut alors passer a un vrai montage de dossier plutot qu'au fichier seul."];
         return;
     }
 
@@ -219,13 +222,13 @@ extern int wine_process_is_running(void);
     self.rootScopeStarted = [root startAccessingSecurityScopedResource];
 
     if (![self directoryReadable:root]) {
-        [self alert:@"Accès perdu" message:@"iOS ne permet plus de lire le dossier choisi. Le jeu ne pourrait pas charger ses DLL et DATA."];
+        [self alert:@"Acces perdu" message:@"iOS ne permet plus de lire le dossier choisi. Le jeu ne pourrait pas charger ses DLL et DATA."];
         return;
     }
 
     NSString *relative = [exePath substringFromIndex:prefixWithSlash.length];
     if (!relative.length || ![relative canBeConvertedToEncoding:NSASCIIStringEncoding]) {
-        [self alert:@"Chemin EXE" message:@"Le chemin relatif du .exe doit utiliser des caractères ASCII pour cette build."];
+        [self alert:@"Chemin EXE" message:@"Le chemin relatif du .exe doit utiliser des caracteres ASCII pour cette build."];
         return;
     }
     NSString *winRelative = [relative stringByReplacingOccurrencesOfString:@"/" withString:@"\\"];
@@ -242,7 +245,7 @@ extern int wine_process_is_running(void);
     [fm removeItemAtPath:link error:nil];
     err = nil;
     if (![fm createSymbolicLinkAtPath:link withDestinationPath:rootPath error:&err]) {
-        [self alert:@"Montage SSD impossible" message:err.localizedDescription ?: @"Impossible de créer le lien vers le dossier du jeu."];
+        [self alert:@"Montage SSD impossible" message:err.localizedDescription ?: @"Impossible de creer le lien vers le dossier du jeu."];
         return;
     }
 
@@ -260,7 +263,7 @@ extern int wine_process_is_running(void);
     int ws = wineserver_is_running();
     if (!ws) {
         int rc = wineserver_start(prefix.fileSystemRepresentation);
-        if (rc != 0) { [self alert:@"wineserver" message:[NSString stringWithFormat:@"Impossible de démarrer wineserver (code %d).", rc]]; return; }
+        if (rc != 0) { [self alert:@"wineserver" message:[NSString stringWithFormat:@"Impossible de demarrer wineserver (code %d).", rc]]; return; }
     }
 
     __block NSInteger tries = 0;
@@ -271,16 +274,16 @@ extern int wine_process_is_running(void);
         if (wineserver_is_running()) {
             int rc = wine_process_start(prefix.fileSystemRepresentation);
             if (rc != 0) {
-                [weakSelf alert:@"Lancement impossible" message:[NSString stringWithFormat:@"wine_process_start a renvoyé %d.", rc]];
+                [weakSelf alert:@"Lancement impossible" message:[NSString stringWithFormat:@"wine_process_start a renvoye %d.", rc]];
             } else {
                 [weakSelf alert:@"Lancement externe"
-                         message:[NSString stringWithFormat:@"%@\n\nRacine montée : %@\n\nLe dossier reste ouvert pour Wine pendant le jeu.", exe.lastPathComponent, root.lastPathComponent]];
+                         message:[NSString stringWithFormat:@"%@\n\nRacine montee : %@\n\nLe dossier reste ouvert pour Wine pendant le jeu.", exe.lastPathComponent, root.lastPathComponent]];
             }
             poll = nil;
             return;
         }
         if (tries >= 100) {
-            [weakSelf alert:@"wineserver" message:@"wineserver ne s'est pas déclaré prêt."];
+            [weakSelf alert:@"wineserver" message:@"wineserver ne s'est pas declare pret."];
             poll = nil;
             return;
         }
