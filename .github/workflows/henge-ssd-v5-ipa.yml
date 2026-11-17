@@ -1,0 +1,99 @@
+name: Henge SSD V5 iPadOS 27 USB-C direct disk picker
+on:
+  push:
+    branches: [henge-ssd-v5-build-20261117]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify and extract the SSD patch
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cat henge-ssd/patch-v4.b64 | base64 --decode > "$RUNNER_TEMP/henge-ssd.tar.xz"
+          echo "11fa84a84124f3a5753ec51543e109b1dd6aea3fed40d36d1282c82630d3c915  $RUNNER_TEMP/henge-ssd.tar.xz" | shasum -a 256 --check
+          mkdir -p "$RUNNER_TEMP/ssd-patch"
+          tar -xJf "$RUNNER_TEMP/henge-ssd.tar.xz" -C "$RUNNER_TEMP/ssd-patch"
+          python3 -m py_compile "$RUNNER_TEMP/ssd-patch/apply_external_ssd.py"
+          swiftc -frontend -parse "$RUNNER_TEMP/ssd-patch/ExternalSSD.swift"
+          cat henge-ssd/patch-v5.b64 | base64 --decode > "$RUNNER_TEMP/henge-ssd-v5.tar.gz"
+          echo "db9a8914015bfa77ce815b11fb1b9c5f524193fe456e362f15660eb265c58071  $RUNNER_TEMP/henge-ssd-v5.tar.gz" | shasum -a 256 --check
+          tar -xzf "$RUNNER_TEMP/henge-ssd-v5.tar.gz" -C "$RUNNER_TEMP/ssd-patch"
+          python3 -m py_compile "$RUNNER_TEMP/ssd-patch/patch_file_picker.py"
+          swiftc -frontend -parse "$RUNNER_TEMP/ssd-patch/SSDDiskFilePicker.swift"
+      - name: Verify Xcode 27
+        shell: bash
+        run: |
+          set -euxo pipefail
+          xcodebuild -version
+          test "$(xcodebuild -version | awk '/^Xcode /{split($2,a,"."); print a[1]}')" -ge 27
+          xcrun --sdk iphoneos --show-sdk-version
+          mkdir -p "$HOME/Desktop"
+      - name: Install iOS cross-compile dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          brew install xcodegen meson ninja pkg-config automake autoconf libtool cmake qemu
+          rustup target add aarch64-apple-ios
+      - name: Checkout Henge source and apply USB-C storage patch
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git clone --filter=blob:none https://github.com/Leviidev/Henge.git "$RUNNER_TEMP/Henge"
+          git -C "$RUNNER_TEMP/Henge" checkout 3ff5cfe64e58
+          python3 "$RUNNER_TEMP/ssd-patch/apply_external_ssd.py" "$RUNNER_TEMP/Henge" --check
+          python3 "$RUNNER_TEMP/ssd-patch/apply_external_ssd.py" "$RUNNER_TEMP/Henge"
+          # Qualify the view state to avoid shadowing by Swift's caught Error.
+          sed -i '' 's/^            error = error.localizedDescription$/            self.error = error.localizedDescription/' "$RUNNER_TEMP/Henge/ios/Henge/SessionView.swift"
+          grep -q 'self.error = error.localizedDescription' "$RUNNER_TEMP/Henge/ios/Henge/SessionView.swift"
+          python3 "$RUNNER_TEMP/ssd-patch/patch_file_picker.py" "$RUNNER_TEMP/Henge" --check
+          python3 "$RUNNER_TEMP/ssd-patch/patch_file_picker.py" "$RUNNER_TEMP/Henge"
+          swiftc -frontend -parse "$RUNNER_TEMP/Henge/ios/Henge/SSDDiskFilePicker.swift"
+          swiftc -frontend -parse "$RUNNER_TEMP/Henge/ios/Henge/ExternalSSD.swift"
+          for file in Machines.swift Installer.swift InstallView.swift SessionView.swift MacSettingsView.swift; do
+            swiftc -frontend -parse "$RUNNER_TEMP/Henge/ios/Henge/$file"
+          done
+      - name: Build dependent iOS libraries from Husk
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git clone --depth=1 https://github.com/Leviidev/Husk.git "$RUNNER_TEMP/Husk"
+          cd "$RUNNER_TEMP/Husk"
+          ./scripts/fetch_sources.sh
+          ./scripts/build_ios.sh libffi glib libslirp
+          ./scripts/build_rppairing_ios.sh
+      - name: Build and package Henge SSD
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd "$RUNNER_TEMP/Henge"
+          HUSK="$RUNNER_TEMP/Husk" ./ios/scripts/fetch_deps.sh
+          export IOS_DEPS="$RUNNER_TEMP/Husk/build/ios-arm64/sysroot"
+          export HUSK="$RUNNER_TEMP/Husk"
+          ./ios/scripts/package_ipa.sh
+          cp "$HOME/Desktop/Henge.ipa" "$GITHUB_WORKSPACE/Henge-SSD-experimental.ipa"
+          unzip -t "$GITHUB_WORKSPACE/Henge-SSD-experimental.ipa" | tail -4
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Henge-SSD-build-diagnostics
+          path: |
+            ${{ runner.temp }}/Henge/ios/build/DerivedData.buildlog
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload IPA
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Henge-SSD-v5-file-picker-IPA
+          path: Henge-SSD-experimental.ipa
+          if-no-files-found: error
+          retention-days: 7
